@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">RWA Pay</string>
+    <string name="service_name">RWA PAY Listener</string>
+    <string name="author">github.com/ZumaAkbarID</string>
+</resources>
