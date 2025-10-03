@@ -1,10 +1,22 @@
 package com.rwa.rwapay.services
 
-import android.app.*
-import android.content.*
-import android.os.*
+import android.app.AlarmManager
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.app.Service
+import android.content.ComponentName
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import com.rwa.rwapay.R
+import com.rwa.rwapay.services.NotificationListener
 
 class CoreForegroundService : Service() {
 
@@ -19,25 +31,24 @@ class CoreForegroundService : Service() {
         val notif: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle(getString(R.string.app_name))
             .setContentText("Service berjalan di background")
-            .setSmallIcon(R.mipmap.ic_launcher) // ikon pasti ada
+            .setSmallIcon(R.mipmap.ic_launcher)    // pakai ikon yang pasti ada
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .build()
         startForeground(NOTIF_ID, notif)
 
-        // Sedikit delay lalu minta rebind listener (kalau user sudah beri akses)
+        // sedikit delay lalu rebind listener
         Handler(Looper.getMainLooper()).postDelayed({
             tryRebindListener()
         }, 1200)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        // bisa pasang heartbeat di sini kalau perlu
         return START_STICKY
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
-        // restart otomatis jika user swipe dari recent apps
+        // restart otomatis saat user swipe app
         val restartIntent = Intent(applicationContext, CoreForegroundService::class.java).apply {
             `package` = packageName
         }
@@ -52,7 +63,7 @@ class CoreForegroundService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
-        // kalau dimatikan sistem, coba bangun lagi cepat
+        // kalau dimatikan sistem, bangunkan lagi
         val am = getSystemService(Context.ALARM_SERVICE) as AlarmManager
         val pi = PendingIntent.getService(
             this, 2, Intent(this, CoreForegroundService::class.java),
@@ -61,7 +72,7 @@ class CoreForegroundService : Service() {
         am.set(AlarmManager.ELAPSED_REALTIME, SystemClock.elapsedRealtime() + 1500, pi)
     }
 
-    override fun onBind(intent: Intent?): IBinder? = null
+    override fun onBind(intent: Intent?) = null
 
     private fun createChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -76,15 +87,19 @@ class CoreForegroundService : Service() {
     }
 
     private fun tryRebindListener() {
-        // trik disable-enable component supaya NotificationListener di-rebind sistem
+        // trik: toggle component supaya NotificationListener di-rebind sistem
         try {
             val pm = packageManager
             val cn = ComponentName(this, NotificationListener::class.java)
             pm.setComponentEnabledSetting(
-                cn, PackageManager.COMPONENT_ENABLED_STATE_DISABLED, PackageManager.DONT_KILL_APP
+                cn,
+                PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
+                PackageManager.DONT_KILL_APP
             )
             pm.setComponentEnabledSetting(
-                cn, PackageManager.COMPONENT_ENABLED_STATE_ENABLED, PackageManager.DONT_KILL_APP
+                cn,
+                PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
+                PackageManager.DONT_KILL_APP
             )
         } catch (_: Exception) { }
     }
