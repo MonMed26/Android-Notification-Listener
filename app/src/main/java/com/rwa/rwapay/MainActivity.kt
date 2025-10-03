@@ -1,14 +1,18 @@
 package com.rwa.rwapay
 
+import android.Manifest
 import android.content.*
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
 import android.provider.Settings
 import android.text.method.ScrollingMovementMethod
 import android.util.Log
 import android.widget.*
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
@@ -45,6 +49,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var testWebhookButton: Button
     private lateinit var logView: TextView
 
+    // Tombol opsional untuk buka setting battery/auto-start (kalau ada di layout-mu)
+    // private lateinit var btnBattery: Button
+    // private lateinit var btnAutostart: Button
+
     // RecyclerView
     private lateinit var appRecycler: RecyclerView
     private lateinit var appAdapter: AppListAdapter
@@ -57,6 +65,13 @@ class MainActivity : AppCompatActivity() {
             .connectTimeout(10, TimeUnit.SECONDS)
             .readTimeout(15, TimeUnit.SECONDS)
             .build()
+    }
+
+    // Permission POST_NOTIFICATIONS (Android 13+) — aman kalau tak dipakai
+    private val requestNotifPermission = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        appendLog(if (granted) "Izin notifikasi diberikan" else "Izin notifikasi ditolak")
     }
 
     private val broadcastReceiver = object : BroadcastReceiver() {
@@ -80,6 +95,66 @@ class MainActivity : AppCompatActivity() {
             .contains(context.packageName)
     }
 
+    // ====== Battery Optimization helpers ======
+    private fun isIgnoringBatteryOptimizations(): Boolean {
+        val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+        return pm.isIgnoringBatteryOptimizations(packageName)
+    }
+
+    private fun requestIgnoreBatteryOptimizations() {
+        try {
+            val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                data = Uri.parse("package:$packageName")
+            }
+            startActivity(intent)
+            appendLog("Meminta whitelist battery optimization…")
+        } catch (e: Exception) {
+            appendLog("Gagal buka REQUEST_IGNORE_BATTERY_OPTIMIZATIONS: ${e.message}")
+        }
+    }
+
+    private fun openManufacturerAutoStartSettings() {
+        // Beberapa vendor punya halaman autostart sendiri.
+        val intents = listOf(
+            // Xiaomi
+            Intent().setClassName(
+                "com.miui.securitycenter",
+                "com.miui.permcenter.autostart.AutoStartManagementActivity"
+            ),
+            // newer MIUI
+            Intent("miui.intent.action.POWER_HIDE_MODE_APP_LIST").addCategory(Intent.CATEGORY_DEFAULT),
+            // Oppo
+            Intent().setClassName(
+                "com.coloros.safecenter",
+                "com.coloros.safecenter.startupapp.StartupAppListActivity"
+            ),
+            Intent().setClassName(
+                "com.coloros.safecenter",
+                "com.coloros.safecenter.permission.startup.StartupAppListActivity"
+            ),
+            // Vivo
+            Intent().setClassName(
+                "com.vivo.permissionmanager",
+                "com.vivo.permissionmanager.activity.BgStartUpManagerActivity"
+            ),
+            // Huawei
+            Intent().setClassName(
+                "com.huawei.systemmanager",
+                "com.huawei.systemmanager.startupmgr.ui.StartupNormalAppListActivity"
+            )
+        )
+
+        for (i in intents) {
+            try {
+                startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                appendLog("Membuka pengaturan auto-start vendor…")
+                return
+            } catch (_: Exception) { /* coba intent berikutnya */ }
+        }
+        appendLog("Tidak menemukan halaman auto-start vendor.")
+    }
+    // ==========================================
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -100,6 +175,8 @@ class MainActivity : AppCompatActivity() {
         testWebhookButton = findViewById(R.id.testWebhookButton)
         logView = findViewById(R.id.logView); logView.movementMethod = ScrollingMovementMethod()
         appRecycler = findViewById(R.id.appRecycler)
+        // btnBattery = findViewById(R.id.btnBattery)       // kalau kamu punya di layout
+        // btnAutostart = findViewById(R.id.btnAutostart)   // kalau kamu punya di layout
 
         // list log/riwayat notif
         notificationAdapter = ArrayAdapter(this, android.R.layout.simple_list_item_1, notificationHistory)
@@ -166,13 +243,39 @@ class MainActivity : AppCompatActivity() {
             })
         }
 
+        // ====== PERMINTAAN IZIN PENTING ======
+        // 1) POST_NOTIFICATIONS (Android 13+) — opsional tapi bagus untuk notifikasi foreground service
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            requestNotifPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+
+        // 2) Ajak user whitelist battery optimization bila belum
+        if (!isIgnoringBatteryOptimizations()) {
+            requestIgnoreBatteryOptimizations()
+            // opsional: buka halaman autostart vendor agar service tak dibunuh
+            openManufacturerAutoStartSettings()
+        }
+
+        // 3) Ajak user aktifkan akses notifikasi jika belum
         if (!isNotificationServiceEnabled(this)) {
             try { startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) } catch (_: Exception) {}
         }
+
+        // Jika kamu punya tombol khusus di UI:
+        // btnBattery.setOnClickListener { requestIgnoreBatteryOptimizations() }
+        // btnAutostart.setOnClickListener { openManufacturerAutoStartSettings() }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Re-check status setelah user balik dari Settings
+        appendLog(
+            "Battery optimization ignored: " +
+                if (isIgnoringBatteryOptimizations()) "YA" else "TIDAK"
+        )
     }
 
     private fun loadInstalledApps() {
-        // Ambil daftar app (exclude system apps untuk rapi)
         val pm = packageManager
         val allowed = prefs.getStringSet("allowed_packages", emptySet()) ?: emptySet()
         val apps = pm.getInstalledApplications(0)
@@ -205,8 +308,16 @@ class MainActivity : AppCompatActivity() {
         try {
             val pm = context.packageManager
             val componentName = ComponentName(context, NotificationListener::class.java)
-            pm.setComponentEnabledSetting(componentName, PackageManager.COMPONENT_ENABLED_STATE_DISABLED, PackageManager.DONT_KILL_APP)
-            pm.setComponentEnabledSetting(componentName, PackageManager.COMPONENT_ENABLED_STATE_ENABLED, PackageManager.DONT_KILL_APP)
+            pm.setComponentEnabledSetting(
+                componentName,
+                PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
+                PackageManager.DONT_KILL_APP
+            )
+            pm.setComponentEnabledSetting(
+                componentName,
+                PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
+                PackageManager.DONT_KILL_APP
+            )
 
             val serviceIntent = Intent(this, NotificationListener::class.java)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
