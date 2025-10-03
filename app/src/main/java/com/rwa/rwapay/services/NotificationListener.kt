@@ -51,52 +51,54 @@ class NotificationListener : NotificationListenerService() {
         return url
     }
 
+    private fun getAllowedPackages(): Set<String> {
+        val p = getSharedPreferences("listener_prefs", MODE_PRIVATE)
+        val set = p.getStringSet("allowed_packages", emptySet()) ?: emptySet()
+        log("allowed_packages=${set.size}")
+        return set
+    }
+
+    private fun extractText(n: Notification): String {
+        val ex = n.extras
+        val big = ex.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString()
+        if (!big.isNullOrBlank()) return big
+        val lines = ex.getCharSequenceArray(Notification.EXTRA_TEXT_LINES)
+            ?.mapNotNull { it?.toString() }
+            ?.joinToString("\n")
+        if (!lines.isNullOrBlank()) return lines
+        return ex.getCharSequence(Notification.EXTRA_TEXT)?.toString() ?: ""
+    }
+
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
         super.onNotificationPosted(sbn)
         log("onNotificationPosted called")
-        if (!isEnabled()) {
-            log("Listener OFF → skip")
-            return
-        }
+        if (!isEnabled()) { log("Listener OFF → skip"); return }
 
         val pkg = sbn?.packageName ?: run { log("packageName null → skip"); return }
-        val n = sbn.notification ?: run { log("notification null → skip"); return }
-        val title = n.extras.getString(Notification.EXTRA_TITLE)
-        val text = n.extras.getCharSequence(Notification.EXTRA_TEXT)?.toString()
-
-        log("pkg=$pkg, title=$title, text=$text")
-
-        // ====== FILTER sesuai logika awal ======
-        var matched = false
-        if (pkg == "com.forum_asisten" && text?.contains("berhasil menerima Rp") == true) {
-            matched = true
-            log("Matched forum_asisten + 'berhasil menerima Rp'")
-            sendToWebhook(title, text, pkg)
-            sendToMain(title, text)
-        }
-        if (pkg == "id.dana" && text?.contains("berhasil menerima Rp") == true) {
-            matched = true
-            log("Matched id.dana + 'berhasil menerima Rp'")
-            sendToWebhook(title, text, pkg)
-            sendToMain(title, text)
-        }
-        if (!matched) {
-            log("No filter matched → skip webhook")
-        }
-    }
-
-    private fun sendToWebhook(title: String?, text: String?, packageName: String) {
-        val webhookUrl = getWebhookUrl()
-        if (webhookUrl.isEmpty()) {
-            log("Webhook URL kosong — skip POST")
+        val allowed = getAllowedPackages()
+        if (allowed.isNotEmpty() && !allowed.contains(pkg)) {
+            log("pkg=$pkg SKIP (not in allowed list)")
             return
         }
+
+        val n = sbn.notification ?: run { log("notification null → skip"); return }
+        val title = n.extras.getString(Notification.EXTRA_TITLE) ?: ""
+        val text = extractText(n)
+
+        log("SEND | pkg=$pkg, title=$title, text=$text")
+        sendToWebhook(title, text, pkg)
+        sendToMain(title, text)
+    }
+
+    private fun sendToWebhook(title: String, text: String, packageName: String) {
+        val webhookUrl = getWebhookUrl()
+        if (webhookUrl.isEmpty()) { log("Webhook URL kosong — skip POST"); return }
 
         val json = JSONObject()
             .put("event_type", "notification_posted")
             .put("package", packageName)
-            .put("title", title ?: "")
-            .put("text", text ?: "")
+            .put("title", title)
+            .put("text", text)
             .put("posted_at", System.currentTimeMillis())
             .toString()
 
@@ -109,21 +111,15 @@ class NotificationListener : NotificationListenerService() {
 
         log("POST → $webhookUrl")
         client.newCall(req).enqueue(object : Callback {
-            override fun onFailure(call: Call, e: IOException) {
-                log("POST FAILED: ${e.message}")
-            }
-            override fun onResponse(call: Call, response: Response) {
-                response.use {
-                    log("POST OK: HTTP ${response.code}")
-                }
-            }
+            override fun onFailure(call: Call, e: IOException) { log("POST FAILED: ${e.message}") }
+            override fun onResponse(call: Call, response: Response) { response.use { log("POST OK: HTTP ${response.code}") } }
         })
     }
 
-    private fun sendToMain(title: String?, text: String?) {
+    private fun sendToMain(title: String, text: String) {
         val intent = Intent(MainActivity.ACTION_NOTIFICATION_RECEIVED)
-        intent.putExtra("title", title ?: "")
-        intent.putExtra("text", text ?: "")
+        intent.putExtra("title", title)
+        intent.putExtra("text", text)
         sendBroadcast(intent)
     }
 
