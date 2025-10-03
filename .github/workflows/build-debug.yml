@@ -17,6 +17,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+          cache: gradle
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
@@ -27,6 +28,11 @@ jobs:
       - name: Install build tools & platforms (sesuaikan versi)
         run: |
           sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+
+      - name: Make gradlew executable (and fix CRLF)
+        run: |
+          chmod +x gradlew
+          sed -i 's/\r$//' gradlew
 
       - name: Build debug APK
         run: ./gradlew assembleDebug
