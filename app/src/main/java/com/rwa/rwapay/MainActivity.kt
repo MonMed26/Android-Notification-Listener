@@ -1,6 +1,8 @@
 package com.rwa.rwapay
 
 import android.Manifest
+import android.app.AlarmManager
+import android.app.PendingIntent
 import android.content.*
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
@@ -19,6 +21,7 @@ import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.rwa.rwapay.services.NotificationListener
+import com.rwa.rwapay.services.CoreForegroundService
 import com.rwa.rwapay.ui.AppItem
 import com.rwa.rwapay.ui.AppListAdapter
 import okhttp3.MediaType.Companion.toMediaType
@@ -49,11 +52,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var testWebhookButton: Button
     private lateinit var logView: TextView
 
-    // Tombol opsional untuk buka setting battery/auto-start (kalau ada di layout-mu)
-    // private lateinit var btnBattery: Button
-    // private lateinit var btnAutostart: Button
-
-    // RecyclerView
     private lateinit var appRecycler: RecyclerView
     private lateinit var appAdapter: AppListAdapter
 
@@ -67,11 +65,11 @@ class MainActivity : AppCompatActivity() {
             .build()
     }
 
-    // Permission POST_NOTIFICATIONS (Android 13+) — aman kalau tak dipakai
     private val requestNotifPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         appendLog(if (granted) "Izin notifikasi diberikan" else "Izin notifikasi ditolak")
+        ensureListenerActive() // coba rebind setelah izin
     }
 
     private val broadcastReceiver = object : BroadcastReceiver() {
@@ -82,8 +80,7 @@ class MainActivity : AppCompatActivity() {
                 ACTION_NOTIFICATION_RECEIVED -> {
                     val title = intent.getStringExtra("title")
                     val text = intent.getStringExtra("text")
-                    val notification = "$title: $text"
-                    addNotification(notification)
+                    addNotification("$title: $text")
                 }
                 ACTION_LOG -> appendLog(intent.getStringExtra("msg") ?: return)
             }
@@ -95,65 +92,22 @@ class MainActivity : AppCompatActivity() {
             .contains(context.packageName)
     }
 
-    // ====== Battery Optimization helpers ======
+    // === Battery optimization helpers ===
     private fun isIgnoringBatteryOptimizations(): Boolean {
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
         return pm.isIgnoringBatteryOptimizations(packageName)
     }
-
     private fun requestIgnoreBatteryOptimizations() {
         try {
-            val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-                data = Uri.parse("package:$packageName")
-            }
-            startActivity(intent)
+            val i = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+            i.data = Uri.parse("package:$packageName")
+            startActivity(i)
             appendLog("Meminta whitelist battery optimization…")
         } catch (e: Exception) {
-            appendLog("Gagal buka REQUEST_IGNORE_BATTERY_OPTIMIZATIONS: ${e.message}")
+            appendLog("Gagal minta whitelist: ${e.message}")
         }
     }
-
-    private fun openManufacturerAutoStartSettings() {
-        // Beberapa vendor punya halaman autostart sendiri.
-        val intents = listOf(
-            // Xiaomi
-            Intent().setClassName(
-                "com.miui.securitycenter",
-                "com.miui.permcenter.autostart.AutoStartManagementActivity"
-            ),
-            // newer MIUI
-            Intent("miui.intent.action.POWER_HIDE_MODE_APP_LIST").addCategory(Intent.CATEGORY_DEFAULT),
-            // Oppo
-            Intent().setClassName(
-                "com.coloros.safecenter",
-                "com.coloros.safecenter.startupapp.StartupAppListActivity"
-            ),
-            Intent().setClassName(
-                "com.coloros.safecenter",
-                "com.coloros.safecenter.permission.startup.StartupAppListActivity"
-            ),
-            // Vivo
-            Intent().setClassName(
-                "com.vivo.permissionmanager",
-                "com.vivo.permissionmanager.activity.BgStartUpManagerActivity"
-            ),
-            // Huawei
-            Intent().setClassName(
-                "com.huawei.systemmanager",
-                "com.huawei.systemmanager.startupmgr.ui.StartupNormalAppListActivity"
-            )
-        )
-
-        for (i in intents) {
-            try {
-                startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                appendLog("Membuka pengaturan auto-start vendor…")
-                return
-            } catch (_: Exception) { /* coba intent berikutnya */ }
-        }
-        appendLog("Tidak menemukan halaman auto-start vendor.")
-    }
-    // ==========================================
+    // ====================================
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -175,19 +129,14 @@ class MainActivity : AppCompatActivity() {
         testWebhookButton = findViewById(R.id.testWebhookButton)
         logView = findViewById(R.id.logView); logView.movementMethod = ScrollingMovementMethod()
         appRecycler = findViewById(R.id.appRecycler)
-        // btnBattery = findViewById(R.id.btnBattery)       // kalau kamu punya di layout
-        // btnAutostart = findViewById(R.id.btnAutostart)   // kalau kamu punya di layout
 
-        // list log/riwayat notif
         notificationAdapter = ArrayAdapter(this, android.R.layout.simple_list_item_1, notificationHistory)
         notificationListView.adapter = notificationAdapter
 
-        // load awal
         switchEnable.isChecked = prefs.getBoolean("listener_enabled", true)
         inputWebhook.setText(prefs.getString("webhook_url", ""))
         statusTextView.text = if (switchEnable.isChecked) "Listener Enabled" else "Listener Disabled"
 
-        // RecyclerView setup
         appAdapter = AppListAdapter(mutableListOf()) { item, checked ->
             val set = prefs.getStringSet("allowed_packages", mutableSetOf())?.toMutableSet() ?: mutableSetOf()
             if (checked) set.add(item.packageName) else set.remove(item.packageName)
@@ -196,23 +145,18 @@ class MainActivity : AppCompatActivity() {
         }
         appRecycler.layoutManager = LinearLayoutManager(this)
         appRecycler.adapter = appAdapter
-
-        // Muat daftar aplikasi
         loadInstalledApps()
 
         reconnectButton.setOnClickListener {
-            if (!isConnected) {
-                reconnectToService()
-            } else {
-                try { startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) } catch (_: Exception) {}
-            }
+            // tetap sediakan tombol manual
+            reconnectToService()
         }
 
         switchEnable.setOnCheckedChangeListener { _, isChecked ->
             prefs.edit().putBoolean("listener_enabled", isChecked).apply()
             statusTextView.text = if (isChecked) "Listener Enabled" else "Listener Disabled"
             appendLog("Toggle listener: ${if (isChecked) "ON" else "OFF"}")
-            Toast.makeText(this, if (isChecked) "Enabled" else "Disabled", Toast.LENGTH_SHORT).show()
+            if (isChecked) ensureListenerActive()
         }
 
         saveButton.setOnClickListener {
@@ -243,43 +187,55 @@ class MainActivity : AppCompatActivity() {
             })
         }
 
-        // ====== PERMINTAAN IZIN PENTING ======
-        // 1) POST_NOTIFICATIONS (Android 13+) — opsional tapi bagus untuk notifikasi foreground service
+        // ===== PERMISSIONS & AUTO-START =====
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             requestNotifPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
+        if (!isIgnoringBatteryOptimizations()) requestIgnoreBatteryOptimizations()
 
-        // 2) Ajak user whitelist battery optimization bila belum
-        if (!isIgnoringBatteryOptimizations()) {
-            requestIgnoreBatteryOptimizations()
-            // opsional: buka halaman autostart vendor agar service tak dibunuh
-            openManufacturerAutoStartSettings()
-        }
+        // 1) START foreground service segera saat app dibuka
+        startCoreService()
 
-        // 3) Ajak user aktifkan akses notifikasi jika belum
+        // 2) Auto-rebind listener jika izin & toggle sudah OK
+        ensureListenerActive()
+
+        // 3) Kalau akses notifikasi belum aktif, arahkan user
         if (!isNotificationServiceEnabled(this)) {
             try { startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) } catch (_: Exception) {}
         }
-
-        // Jika kamu punya tombol khusus di UI:
-        // btnBattery.setOnClickListener { requestIgnoreBatteryOptimizations() }
-        // btnAutostart.setOnClickListener { openManufacturerAutoStartSettings() }
     }
 
     override fun onResume() {
         super.onResume()
-        // Re-check status setelah user balik dari Settings
-        appendLog(
-            "Battery optimization ignored: " +
-                if (isIgnoringBatteryOptimizations()) "YA" else "TIDAK"
-        )
+        // Pastikan lagi setelah kembali dari Settings
+        ensureListenerActive()
+    }
+
+    private fun startCoreService() {
+        val svc = Intent(this, CoreForegroundService::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            ContextCompat.startForegroundService(this, svc)
+        } else {
+            startService(svc)
+        }
+        appendLog("CoreForegroundService started")
+    }
+
+    private fun ensureListenerActive() {
+        val enabledToggle = prefs.getBoolean("listener_enabled", true)
+        val hasAccess = isNotificationServiceEnabled(this)
+        appendLog("ensureListenerActive() toggle=$enabledToggle, access=$hasAccess")
+        if (enabledToggle && hasAccess) {
+            // trik disable-enable component untuk rebind
+            restartNotificationListenerService(this)
+        }
     }
 
     private fun loadInstalledApps() {
         val pm = packageManager
         val allowed = prefs.getStringSet("allowed_packages", emptySet()) ?: emptySet()
         val apps = pm.getInstalledApplications(0)
-            .filter { (it.flags and ApplicationInfo.FLAG_SYSTEM) == 0 } // hide system apps; hapus baris ini jika ingin tampil semua
+            .filter { (it.flags and ApplicationInfo.FLAG_SYSTEM) == 0 }
             .sortedBy { pm.getApplicationLabel(it).toString().lowercase() }
             .map {
                 AppItem(
@@ -300,30 +256,16 @@ class MainActivity : AppCompatActivity() {
 
     private fun reconnectToService() {
         statusTextView.text = "Status: Reconnecting..."
-        appendLog("Rebinding NotificationListenerService...")
+        appendLog("Rebinding NotificationListenerService (manual)…")
         restartNotificationListenerService(this)
     }
 
     private fun restartNotificationListenerService(context: Context) {
         try {
             val pm = context.packageManager
-            val componentName = ComponentName(context, NotificationListener::class.java)
-            pm.setComponentEnabledSetting(
-                componentName,
-                PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
-                PackageManager.DONT_KILL_APP
-            )
-            pm.setComponentEnabledSetting(
-                componentName,
-                PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
-                PackageManager.DONT_KILL_APP
-            )
-
-            val serviceIntent = Intent(this, NotificationListener::class.java)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                ContextCompat.startForegroundService(this, serviceIntent)
-            } else startService(serviceIntent)
-
+            val cn = ComponentName(context, NotificationListener::class.java)
+            pm.setComponentEnabledSetting(cn, PackageManager.COMPONENT_ENABLED_STATE_DISABLED, PackageManager.DONT_KILL_APP)
+            pm.setComponentEnabledSetting(cn, PackageManager.COMPONENT_ENABLED_STATE_ENABLED, PackageManager.DONT_KILL_APP)
         } catch (e: Exception) {
             Log.e("ServiceRestart", "Gagal restart NotificationListenerService", e)
             appendLog("ERROR restart service: ${e.message}")
