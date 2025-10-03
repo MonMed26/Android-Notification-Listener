@@ -1,10 +1,7 @@
 package com.rwa.rwapay
 
-import android.content.BroadcastReceiver
-import android.content.ComponentName
-import android.content.Context
-import android.content.Intent
-import android.content.IntentFilter
+import android.content.*
+import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -15,7 +12,11 @@ import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
 import com.rwa.rwapay.services.NotificationListener
+import com.rwa.rwapay.ui.AppItem
+import com.rwa.rwapay.ui.AppListAdapter
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -28,7 +29,7 @@ class MainActivity : AppCompatActivity() {
         const val ACTION_LISTENER_CONNECTED = "com.rwa.rwapay.ACTION_LISTENER_CONNECTED"
         const val ACTION_LISTENER_DISCONNECTED = "com.rwa.rwapay.ACTION_LISTENER_DISCONNECTED"
         const val ACTION_NOTIFICATION_RECEIVED = "com.rwa.rwapay.ACTION_NOTIFICATION_RECEIVED"
-        const val ACTION_LOG = "com.rwa.rwapay.ACTION_LOG"  // <--- untuk log dari service
+        const val ACTION_LOG = "com.rwa.rwapay.ACTION_LOG"
     }
 
     private lateinit var reconnectButton: Button
@@ -43,6 +44,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var saveButton: Button
     private lateinit var testWebhookButton: Button
     private lateinit var logView: TextView
+
+    // RecyclerView
+    private lateinit var appRecycler: RecyclerView
+    private lateinit var appAdapter: AppListAdapter
 
     private val prefs by lazy { getSharedPreferences("listener_prefs", MODE_PRIVATE) }
 
@@ -65,10 +70,7 @@ class MainActivity : AppCompatActivity() {
                     val notification = "$title: $text"
                     addNotification(notification)
                 }
-                ACTION_LOG -> {
-                    val msg = intent.getStringExtra("msg") ?: return
-                    appendLog(msg)
-                }
+                ACTION_LOG -> appendLog(intent.getStringExtra("msg") ?: return)
             }
         }
     }
@@ -96,25 +98,36 @@ class MainActivity : AppCompatActivity() {
         inputWebhook = findViewById(R.id.inputWebhook)
         saveButton = findViewById(R.id.saveButton)
         testWebhookButton = findViewById(R.id.testWebhookButton)
-        logView = findViewById(R.id.logView)
-        logView.movementMethod = ScrollingMovementMethod()
+        logView = findViewById(R.id.logView); logView.movementMethod = ScrollingMovementMethod()
+        appRecycler = findViewById(R.id.appRecycler)
 
+        // list log/riwayat notif
         notificationAdapter = ArrayAdapter(this, android.R.layout.simple_list_item_1, notificationHistory)
         notificationListView.adapter = notificationAdapter
 
         // load awal
         switchEnable.isChecked = prefs.getBoolean("listener_enabled", true)
         inputWebhook.setText(prefs.getString("webhook_url", ""))
-
         statusTextView.text = if (switchEnable.isChecked) "Listener Enabled" else "Listener Disabled"
+
+        // RecyclerView setup
+        appAdapter = AppListAdapter(mutableListOf()) { item, checked ->
+            val set = prefs.getStringSet("allowed_packages", mutableSetOf())?.toMutableSet() ?: mutableSetOf()
+            if (checked) set.add(item.packageName) else set.remove(item.packageName)
+            prefs.edit().putStringSet("allowed_packages", set).apply()
+            appendLog("Filter ${item.packageName}: ${if (checked) "ON" else "OFF"}")
+        }
+        appRecycler.layoutManager = LinearLayoutManager(this)
+        appRecycler.adapter = appAdapter
+
+        // Muat daftar aplikasi
+        loadInstalledApps()
 
         reconnectButton.setOnClickListener {
             if (!isConnected) {
                 reconnectToService()
             } else {
-                try {
-                    startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
-                } catch (_: Exception) {}
+                try { startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) } catch (_: Exception) {}
             }
         }
 
@@ -132,7 +145,6 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, "Webhook URL saved", Toast.LENGTH_SHORT).show()
         }
 
-        // Tombol TEST WEBHOOK
         testWebhookButton.setOnClickListener {
             val url = prefs.getString("webhook_url", "") ?: ""
             if (url.isEmpty()) {
@@ -140,35 +152,42 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this, "Isi Webhook URL dulu", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
-            val payload = """{
-              "event_type":"test",
-              "message":"Hello from RWAPay",
-              "ts":${System.currentTimeMillis()}
-            }""".trimIndent()
+            val payload = """{"event_type":"test","message":"Hello from RWAPay","ts":${System.currentTimeMillis()}}"""
             val body = payload.toRequestBody("application/json; charset=utf-8".toMediaType())
-            val req = Request.Builder()
-                .url(url)
-                .addHeader("Content-Type", "application/json")
-                .post(body)
-                .build()
+            val req = Request.Builder().url(url).addHeader("Content-Type", "application/json").post(body).build()
             appendLog("TEST → POST $url")
             client.newCall(req).enqueue(object : okhttp3.Callback {
                 override fun onFailure(call: okhttp3.Call, e: java.io.IOException) {
                     appendLog("TEST FAILED: ${e.message}")
                 }
                 override fun onResponse(call: okhttp3.Call, response: okhttp3.Response) {
-                    response.use {
-                        appendLog("TEST OK: HTTP ${response.code}")
-                    }
+                    response.use { appendLog("TEST OK: HTTP ${response.code}") }
                 }
             })
         }
 
         if (!isNotificationServiceEnabled(this)) {
-            try {
-                startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
-            } catch (_: Exception) {}
+            try { startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) } catch (_: Exception) {}
         }
+    }
+
+    private fun loadInstalledApps() {
+        // Ambil daftar app (exclude system apps untuk rapi)
+        val pm = packageManager
+        val allowed = prefs.getStringSet("allowed_packages", emptySet()) ?: emptySet()
+        val apps = pm.getInstalledApplications(0)
+            .filter { (it.flags and ApplicationInfo.FLAG_SYSTEM) == 0 } // hide system apps; hapus baris ini jika ingin tampil semua
+            .sortedBy { pm.getApplicationLabel(it).toString().lowercase() }
+            .map {
+                AppItem(
+                    label = pm.getApplicationLabel(it).toString(),
+                    packageName = it.packageName,
+                    icon = pm.getApplicationIcon(it),
+                    enabled = allowed.contains(it.packageName)
+                )
+            }
+        appAdapter.replaceAll(apps)
+        appendLog("Loaded ${apps.size} apps into filter list")
     }
 
     override fun onDestroy() {
@@ -186,24 +205,14 @@ class MainActivity : AppCompatActivity() {
         try {
             val pm = context.packageManager
             val componentName = ComponentName(context, NotificationListener::class.java)
-
-            pm.setComponentEnabledSetting(
-                componentName,
-                PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
-                PackageManager.DONT_KILL_APP
-            )
-            pm.setComponentEnabledSetting(
-                componentName,
-                PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
-                PackageManager.DONT_KILL_APP
-            )
+            pm.setComponentEnabledSetting(componentName, PackageManager.COMPONENT_ENABLED_STATE_DISABLED, PackageManager.DONT_KILL_APP)
+            pm.setComponentEnabledSetting(componentName, PackageManager.COMPONENT_ENABLED_STATE_ENABLED, PackageManager.DONT_KILL_APP)
 
             val serviceIntent = Intent(this, NotificationListener::class.java)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 ContextCompat.startForegroundService(this, serviceIntent)
-            } else {
-                startService(serviceIntent)
-            }
+            } else startService(serviceIntent)
+
         } catch (e: Exception) {
             Log.e("ServiceRestart", "Gagal restart NotificationListenerService", e)
             appendLog("ERROR restart service: ${e.message}")
@@ -233,7 +242,6 @@ class MainActivity : AppCompatActivity() {
             val time = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
             val newText = logView.text.toString() + "\n[$time] $msg"
             logView.text = newText
-            // auto-scroll
             val layout = logView.layout
             if (layout != null) {
                 val scrollAmount = layout.getLineTop(logView.lineCount) - logView.height
