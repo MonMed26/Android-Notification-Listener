@@ -31,10 +31,8 @@ class MainActivity : AppCompatActivity() {
     private val notificationHistory = mutableListOf<String>()
     private var isConnected = false
 
-    // NEW: UI baru
     private lateinit var switchEnable: Switch
     private lateinit var inputWebhook: EditText
-    private lateinit var inputSecret: EditText
     private lateinit var saveButton: Button
 
     private val prefs by lazy { getSharedPreferences("listener_prefs", MODE_PRIVATE) }
@@ -63,62 +61,52 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        // Register receiver
         registerReceiver(broadcastReceiver, IntentFilter().apply {
             addAction(ACTION_LISTENER_CONNECTED)
             addAction(ACTION_LISTENER_DISCONNECTED)
             addAction(ACTION_NOTIFICATION_RECEIVED)
         })
 
-        // Bind UI
         reconnectButton = findViewById(R.id.reconnectButton)
         statusTextView = findViewById(R.id.statusTextView)
         notificationListView = findViewById(R.id.notificationListView)
 
         switchEnable = findViewById(R.id.listenerSwitch)
         inputWebhook = findViewById(R.id.inputWebhook)
-        inputSecret = findViewById(R.id.inputSecret)
         saveButton = findViewById(R.id.saveButton)
 
         notificationAdapter = ArrayAdapter(this, android.R.layout.simple_list_item_1, notificationHistory)
         notificationListView.adapter = notificationAdapter
 
-        // Load nilai awal dari prefs
+        // load nilai awal
         switchEnable.isChecked = prefs.getBoolean("listener_enabled", true)
         inputWebhook.setText(prefs.getString("webhook_url", ""))
-        inputSecret.setText(prefs.getString("webhook_secret", ""))
 
-        // Status awal berdasarkan toggle
         statusTextView.text = if (switchEnable.isChecked) "Listener Enabled" else "Listener Disabled"
 
         reconnectButton.setOnClickListener {
             if (!isConnected) {
                 reconnectToService()
             } else {
-                // buka halaman izin, kadang perlu toggle izin agar service rebind
                 try {
                     startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
                 } catch (_: Exception) {}
             }
         }
 
-        // Toggle ON/OFF
         switchEnable.setOnCheckedChangeListener { _, isChecked ->
             prefs.edit().putBoolean("listener_enabled", isChecked).apply()
             statusTextView.text = if (isChecked) "Listener Enabled" else "Listener Disabled"
             Toast.makeText(this, if (isChecked) "Enabled" else "Disabled", Toast.LENGTH_SHORT).show()
         }
 
-        // Save webhook & secret
         saveButton.setOnClickListener {
             prefs.edit()
                 .putString("webhook_url", inputWebhook.text.toString().trim())
-                .putString("webhook_secret", inputSecret.text.toString())
                 .apply()
-            Toast.makeText(this, "Webhook & Secret saved", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Webhook URL saved", Toast.LENGTH_SHORT).show()
         }
 
-        // Minta user aktifkan izin Notification Access bila belum aktif
         if (!isNotificationServiceEnabled(this)) {
             try {
                 startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
@@ -134,9 +122,6 @@ class MainActivity : AppCompatActivity() {
     private fun reconnectToService() {
         statusTextView.text = "Status: Reconnecting..."
         restartNotificationListenerService(this)
-        statusTextView.postDelayed({
-            // bisa tambah verifikasi/cek di sini kalau mau
-        }, 2000)
     }
 
     private fun restartNotificationListenerService(context: Context) {
