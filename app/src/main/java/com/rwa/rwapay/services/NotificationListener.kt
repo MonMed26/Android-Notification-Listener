@@ -40,11 +40,9 @@ class NotificationListener : NotificationListenerService() {
         return p.getBoolean("listener_enabled", true)
     }
 
-    private fun getWebhook(): Pair<String, String> {
+    private fun getWebhookUrl(): String {
         val p = getSharedPreferences("listener_prefs", MODE_PRIVATE)
-        val url = p.getString("webhook_url", "") ?: ""
-        val secret = p.getString("webhook_secret", "") ?: ""
-        return url to secret
+        return p.getString("webhook_url", "") ?: ""
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
@@ -56,7 +54,6 @@ class NotificationListener : NotificationListenerService() {
         val title = n.extras.getString(Notification.EXTRA_TITLE)
         val text = n.extras.getCharSequence(Notification.EXTRA_TEXT)?.toString()
 
-        // ====== FILTER CONTOH SESUAI LOGIKA LAMA ======
         if (pkg == "com.forum_asisten" && text?.contains("berhasil menerima Rp") == true) {
             sendToWebhook(title, text, pkg)
             sendToMain(title, text)
@@ -65,11 +62,10 @@ class NotificationListener : NotificationListenerService() {
             sendToWebhook(title, text, pkg)
             sendToMain(title, text)
         }
-        // Tambah filter lain di sini bila diperlukan.
     }
 
     private fun sendToWebhook(title: String?, text: String?, packageName: String) {
-        val (webhookUrl, secret) = getWebhook()
+        val webhookUrl = getWebhookUrl()
         if (webhookUrl.isEmpty()) {
             Log.w(TAG, "Webhook URL kosong — skip.")
             return
@@ -86,7 +82,6 @@ class NotificationListener : NotificationListenerService() {
         val body = json.toRequestBody("application/json; charset=utf-8".toMediaType())
         val req = Request.Builder()
             .url(webhookUrl)
-            .addHeader("X-Listener-Token", secret)
             .addHeader("Content-Type", "application/json")
             .post(body)
             .build()
