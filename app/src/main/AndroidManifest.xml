@@ -2,10 +2,31 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <!-- Wajib untuk HTTP/HTTPS -->
     <uses-permission android:name="android.permission.INTERNET"/>
-    <uses-permission android:name="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
+
+    <!-- Agar listener bisa di-bind oleh sistem (user harus enable di Settings) -->
+    <uses-permission
+        android:name="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
         tools:ignore="ProtectedPermissions" />
+
+    <!-- Biar bisa lihat semua paket terpasang (OK karena tidak upload ke Play) -->
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"/>
+
+    <!-- Bangunin device dan jaga proses -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <!-- Foreground service untuk stabilitas -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+
+    <!-- Notifikasi (Android 13+ untuk notifikasi foreground service) -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Auto start setelah reboot -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+
+    <!-- Minta pengecualian dari battery optimization (user harus setujui lewat intent) -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
 
     <application
         android:allowBackup="true"
@@ -16,7 +37,7 @@
         android:roundIcon="@mipmap/ic_launcher"
         android:supportsRtl="true"
         android:theme="@style/Theme.RWAPay"
-        tools:targetApi="31">
+        tools:targetApi="34">
 
         <activity
             android:name=".MainActivity"
@@ -27,11 +48,41 @@
             </intent-filter>
         </activity>
 
+        <!-- Auto start setelah boot & setelah app di-update -->
+        <receiver
+            android:name=".receivers.BootReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- (Opsional) kalau tetap mau pakai receiver dari plugin lama -->
+        <!--
+        <receiver android:name="im.zoe.labs.flutter_notification_listener.RebootBroadcastReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+        -->
+
+        <!-- Foreground service inti (notifikasi permanen) -->
+        <service
+            android:name=".services.CoreForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+        <!-- NotificationListenerService -->
         <service
             android:name=".services.NotificationListener"
-        android:label="@string/service_name"
-        android:exported="false"
-        android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            android:label="@string/service_name"
+            android:exported="false"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
             <intent-filter>
                 <action android:name="android.service.notification.NotificationListenerService" />
             </intent-filter>
@@ -42,5 +93,6 @@
                 android:name="android.service.notification.disabled_filter_types"
                 android:value="ongoing|silent" />
         </service>
+
     </application>
 </manifest>
