@@ -2,27 +2,28 @@ package com.rwa.rwapay.services
 
 import android.app.Notification
 import android.content.Intent
-import android.os.Build
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.util.Log
 import com.rwa.rwapay.MainActivity
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.io.IOException
-import java.security.SecureRandom
-import java.security.cert.X509Certificate
-import javax.net.ssl.SSLContext
-import javax.net.ssl.TrustManager
-import javax.net.ssl.X509TrustManager
+import java.util.concurrent.TimeUnit
 
 class NotificationListener : NotificationListenerService() {
-    private val TAG = "RWANotificationListenerService"
-    private val WEBHOOK_URL = "" // set webbook here
-    private val LISTENER_SECRET = "" // set webhook listener secret here
+
+    private val TAG = "RWANotificationListener"
+
+    private val client by lazy {
+        OkHttpClient.Builder()
+            .callTimeout(15, TimeUnit.SECONDS)
+            .connectTimeout(10, TimeUnit.SECONDS)
+            .readTimeout(15, TimeUnit.SECONDS)
+            .build()
+    }
 
     override fun onListenerConnected() {
         super.onListenerConnected()
@@ -34,85 +35,77 @@ class NotificationListener : NotificationListenerService() {
         sendBroadcast(Intent(MainActivity.ACTION_LISTENER_DISCONNECTED))
     }
 
-    fun getUnsafeOkHttpClient(): OkHttpClient {
-        val trustAllCerts = arrayOf<TrustManager>(
-            object : X509TrustManager {
-                override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
-                override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {}
-                override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
-            }
-        )
+    private fun isEnabled(): Boolean {
+        val p = getSharedPreferences("listener_prefs", MODE_PRIVATE)
+        return p.getBoolean("listener_enabled", true)
+    }
 
-        val sslContext = SSLContext.getInstance("SSL")
-        sslContext.init(null, trustAllCerts, SecureRandom())
-        val sslSocketFactory = sslContext.socketFactory
-
-        return OkHttpClient.Builder()
-            .sslSocketFactory(sslSocketFactory, trustAllCerts[0] as X509TrustManager)
-            .hostnameVerifier { _, _ -> true }
-            .build()
+    private fun getWebhook(): Pair<String, String> {
+        val p = getSharedPreferences("listener_prefs", MODE_PRIVATE)
+        val url = p.getString("webhook_url", "") ?: ""
+        val secret = p.getString("webhook_secret", "") ?: ""
+        return url to secret
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
         super.onNotificationPosted(sbn)
+        if (!isEnabled()) return
 
-        val packageName = sbn?.packageName
-        val notification = sbn?.notification
-        val title = notification?.extras?.getString(Notification.EXTRA_TITLE)
-        val text = notification?.extras?.getString(Notification.EXTRA_TEXT)
+        val pkg = sbn?.packageName ?: return
+        val n = sbn.notification ?: return
+        val title = n.extras.getString(Notification.EXTRA_TITLE)
+        val text = n.extras.getCharSequence(Notification.EXTRA_TEXT)?.toString()
 
-        if (packageName == "com.forum_asisten" && text?.contains("berhasil menerima Rp") == true) {
-            sendToWebhook(title, text)
-            sendNotificationToMainActivity(title, text)
+        // ====== FILTER CONTOH SESUAI LOGIKA LAMA ======
+        if (pkg == "com.forum_asisten" && text?.contains("berhasil menerima Rp") == true) {
+            sendToWebhook(title, text, pkg)
+            sendToMain(title, text)
         }
-
-        if (packageName == "id.dana" && text?.contains("berhasil menerima Rp") == true) {
-            sendToWebhook(title, text)
-            sendNotificationToMainActivity(title, text)
+        if (pkg == "id.dana" && text?.contains("berhasil menerima Rp") == true) {
+            sendToWebhook(title, text, pkg)
+            sendToMain(title, text)
         }
+        // Tambah filter lain di sini bila diperlukan.
     }
 
-    private fun sendToWebhook(title: String?, text: String?) {
-        val client = getUnsafeOkHttpClient()
+    private fun sendToWebhook(title: String?, text: String?, packageName: String) {
+        val (webhookUrl, secret) = getWebhook()
+        if (webhookUrl.isEmpty()) {
+            Log.w(TAG, "Webhook URL kosong — skip.")
+            return
+        }
 
         val json = JSONObject()
-        json.put("title", title)
-        json.put("text", text)
+            .put("event_type", "notification_posted")
+            .put("package", packageName)
+            .put("title", title ?: "")
+            .put("text", text ?: "")
+            .put("posted_at", System.currentTimeMillis())
+            .toString()
 
-//        val body = RequestBody.create(
-//            "application/json; charset=utf-8".toMediaTypeOrNull(),
-//            json.toString()
-//        )
-
-        val mediaType = "application/json; charset=utf-8".toMediaType()
-        val body = json.toString().toRequestBody(mediaType)
-
-        val request = Request.Builder()
-            .url(WEBHOOK_URL)
-            .addHeader("X-Listener-Token", LISTENER_SECRET)
+        val body = json.toRequestBody("application/json; charset=utf-8".toMediaType())
+        val req = Request.Builder()
+            .url(webhookUrl)
+            .addHeader("X-Listener-Token", secret)
             .addHeader("Content-Type", "application/json")
             .post(body)
             .build()
 
-        client.newCall(request).enqueue(object : Callback {
+        client.newCall(req).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
-                e.printStackTrace()
+                Log.e(TAG, "Webhook gagal: ${e.message}", e)
             }
-
             override fun onResponse(call: Call, response: Response) {
-                response.use {
-                    if (!response.isSuccessful) throw IOException("Unexpected code $response")
-
-                    Log.d(TAG, "Webhook response: ${response.body?.string()}")
-                }
+                response.close()
+                Log.d(TAG, "Webhook response code: ${response.code}")
             }
         })
     }
 
-    private fun sendNotificationToMainActivity(title: String?, text: String?) {
+    private fun sendToMain(title: String?, text: String?) {
         val intent = Intent(MainActivity.ACTION_NOTIFICATION_RECEIVED)
-        intent.putExtra("title", title)
-        intent.putExtra("text", text)
+        intent.putExtra("title", title ?: "")
+        intent.putExtra("text", text ?: "")
         sendBroadcast(intent)
     }
 }
