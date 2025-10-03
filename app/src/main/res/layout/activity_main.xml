@@ -10,6 +10,15 @@
         android:padding="16dp">
 
         <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Melissa Pay"
+            android:textAlignment="center"
+            android:textColor="@android:color/black"
+            android:textSize="24sp"
+            android:textStyle="bold"
+            android:layout_marginBottom="24dp"/>
+        <TextView
             android:id="@+id/statusTextView"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
@@ -65,7 +74,6 @@
                 android:text="Test Webhook" />
         </LinearLayout>
 
-        <!-- ====== Allowed Apps section ====== -->
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -80,14 +88,12 @@
             android:layout_height="260dp"
             android:layout_marginTop="8dp" />
 
-        <!-- Riwayat notifikasi (opsional) -->
         <ListView
             android:id="@+id/notificationListView"
             android:layout_width="match_parent"
             android:layout_height="160dp"
             android:layout_marginTop="16dp" />
 
-        <!-- LOG -->
         <TextView
             android:id="@+id/logView"
             android:layout_width="match_parent"
@@ -107,8 +113,8 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="12dp"
-            android:text="github.com/ZumaAkbarID"
+            android:text="Created by ♥️ Abang Medot"
             android:textAlignment="center"
             android:textColor="@android:color/black" />
-    </LinearLayout>
+        </LinearLayout>
 </ScrollView>
