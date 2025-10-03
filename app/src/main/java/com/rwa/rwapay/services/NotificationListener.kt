@@ -27,47 +27,68 @@ class NotificationListener : NotificationListenerService() {
 
     override fun onListenerConnected() {
         super.onListenerConnected()
+        log("Service connected")
         sendBroadcast(Intent(MainActivity.ACTION_LISTENER_CONNECTED))
     }
 
     override fun onListenerDisconnected() {
         super.onListenerDisconnected()
+        log("Service disconnected")
         sendBroadcast(Intent(MainActivity.ACTION_LISTENER_DISCONNECTED))
     }
 
     private fun isEnabled(): Boolean {
         val p = getSharedPreferences("listener_prefs", MODE_PRIVATE)
-        return p.getBoolean("listener_enabled", true)
+        val enabled = p.getBoolean("listener_enabled", true)
+        log("isEnabled=$enabled")
+        return enabled
     }
 
     private fun getWebhookUrl(): String {
         val p = getSharedPreferences("listener_prefs", MODE_PRIVATE)
-        return p.getString("webhook_url", "") ?: ""
+        val url = p.getString("webhook_url", "") ?: ""
+        log("getWebhookUrl=$url")
+        return url
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
         super.onNotificationPosted(sbn)
-        if (!isEnabled()) return
+        log("onNotificationPosted called")
+        if (!isEnabled()) {
+            log("Listener OFF → skip")
+            return
+        }
 
-        val pkg = sbn?.packageName ?: return
-        val n = sbn.notification ?: return
+        val pkg = sbn?.packageName ?: run { log("packageName null → skip"); return }
+        val n = sbn.notification ?: run { log("notification null → skip"); return }
         val title = n.extras.getString(Notification.EXTRA_TITLE)
         val text = n.extras.getCharSequence(Notification.EXTRA_TEXT)?.toString()
 
+        log("pkg=$pkg, title=$title, text=$text")
+
+        // ====== FILTER sesuai logika awal ======
+        var matched = false
         if (pkg == "com.forum_asisten" && text?.contains("berhasil menerima Rp") == true) {
+            matched = true
+            log("Matched forum_asisten + 'berhasil menerima Rp'")
             sendToWebhook(title, text, pkg)
             sendToMain(title, text)
         }
         if (pkg == "id.dana" && text?.contains("berhasil menerima Rp") == true) {
+            matched = true
+            log("Matched id.dana + 'berhasil menerima Rp'")
             sendToWebhook(title, text, pkg)
             sendToMain(title, text)
+        }
+        if (!matched) {
+            log("No filter matched → skip webhook")
         }
     }
 
     private fun sendToWebhook(title: String?, text: String?, packageName: String) {
         val webhookUrl = getWebhookUrl()
         if (webhookUrl.isEmpty()) {
-            Log.w(TAG, "Webhook URL kosong — skip.")
+            log("Webhook URL kosong — skip POST")
             return
         }
 
@@ -86,13 +107,15 @@ class NotificationListener : NotificationListenerService() {
             .post(body)
             .build()
 
+        log("POST → $webhookUrl")
         client.newCall(req).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
-                Log.e(TAG, "Webhook gagal: ${e.message}", e)
+                log("POST FAILED: ${e.message}")
             }
             override fun onResponse(call: Call, response: Response) {
-                response.close()
-                Log.d(TAG, "Webhook response code: ${response.code}")
+                response.use {
+                    log("POST OK: HTTP ${response.code}")
+                }
             }
         })
     }
@@ -102,5 +125,12 @@ class NotificationListener : NotificationListenerService() {
         intent.putExtra("title", title ?: "")
         intent.putExtra("text", text ?: "")
         sendBroadcast(intent)
+    }
+
+    private fun log(msg: String) {
+        Log.d(TAG, msg)
+        val i = Intent(MainActivity.ACTION_LOG)
+        i.putExtra("msg", msg)
+        sendBroadcast(i)
     }
 }
