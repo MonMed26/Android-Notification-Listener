@@ -24,6 +24,41 @@
         android:layout_marginTop="16dp"
         android:text="Reconnect" />
 
+    <!-- Switch untuk ON/OFF listener -->
+    <Switch
+        android:id="@+id/listenerSwitch"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center_horizontal"
+        android:layout_marginTop="16dp"
+        android:text="Enable Listener" />
+
+    <!-- Input Webhook URL -->
+    <EditText
+        android:id="@+id/inputWebhook"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="Webhook URL"
+        android:inputType="textUri"
+        android:layout_marginTop="16dp" />
+
+    <!-- Input Webhook Secret -->
+    <EditText
+        android:id="@+id/inputSecret"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="Webhook Secret"
+        android:inputType="textPassword"
+        android:layout_marginTop="8dp" />
+
+    <Button
+        android:id="@+id/saveButton"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:layout_gravity="center_horizontal"
+        android:text="Save Webhook" />
+
     <ListView
         android:id="@+id/notificationListView"
         android:layout_width="match_parent"
